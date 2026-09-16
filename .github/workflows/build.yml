@@ -1,1 +1,65 @@
+name: Build OpenWrt for Mi 4A Gigabit
 
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Build Tools
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential libncurses-dev \
+            zlib1g-dev gawk git gettext libssl-dev xsltproc wget unzip python3 file
+
+      - name: Download OpenWrt Image Builder
+        run: |
+          IB_URL="https://downloads.openwrt.org/releases/23.05.5/targets/ramips/mt7621/openwrt-imagebuilder-23.05.5-ramips-mt7621.Linux-x86_64.tar.xz"
+          wget -qO ib.tar.xz "$IB_URL"
+          tar -xf ib.tar.xz
+          mv openwrt-imagebuilder-* ib
+
+      - name: Download AmneziaWG Packages via GitHub CLI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p ib/packages
+          gh release download v23.05.5 \
+            --repo Slava-Shchipunov/awg-openwrt \
+            --pattern "*ramips_mt7621.ipk" \
+            --pattern "amneziawg-tools*mipsel_24kc.ipk" \
+            --pattern "luci-proto-amneziawg*.ipk" \
+            --dir ib/packages
+
+          ls -la ib/packages
+
+      - name: Setup Local Repository and Index
+        run: |
+          cd ib
+          sed -i 's/option check_signature/# option check_signature/' repositories.conf
+          echo "src custom file://$PWD/packages" >> repositories.conf
+          make package_index
+
+      - name: Build Firmware Image
+        run: |
+          cd ib
+          make image PROFILE="xiaomi_mi-router-4a-gigabit" \
+            PACKAGES="luci luci-ssl \
+            -dnsmasq dnsmasq-full \
+            curl ca-bundle \
+            pbr luci-app-pbr nftables kmod-nft-tproxy \
+            kmod-amneziawg amneziawg-tools luci-proto-amneziawg \
+            -kmod-usb-core -kmod-usb2 -kmod-usb3 -kmod-usb-storage"
+
+      - name: Upload Firmware to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mi4A-Gigabit-OpenWrt-AWG
+          path: |
+            ib/bin/targets/ramips/mt7621/*sysupgrade.bin
+            ib/bin/targets/ramips/mt7621/sha256sums
